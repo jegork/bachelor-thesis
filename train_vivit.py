@@ -1,12 +1,12 @@
 import os
 import io
-import imageio as iio
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import tensorflow_datasets as tfds
 from vivit import *
+from tf_video import VideoRandomFlip, VideoRandomContrast, VideoRandomZoom, VideoRandomRotation, VideoRandomCrop
 
 SEED = 42
 os.environ["TF_CUDNN_DETERMINISTIC"] = "1"
@@ -14,8 +14,8 @@ keras.utils.set_random_seed(SEED)
 
 
 # DATA
-BATCH_SIZE = 50
-INPUT_SHAPE = (100, 64, 64, 3)
+BATCH_SIZE = 60
+INPUT_SHAPE = (50, 128, 128, 3)
 NUM_CLASSES = 101
 EVERY_N_FRAME = 3
 
@@ -32,12 +32,13 @@ NUM_PATCHES = (INPUT_SHAPE[0] // PATCH_SIZE[0]) ** 2
 
 # ViViT ARCHITECTURE
 LAYER_NORM_EPS = 1e-6
-PROJECTION_DIM = 128
+PROJECTION_DIM = 512
 NUM_HEADS = 8
-NUM_LAYERS = 8
+NUM_LAYERS = 6
 
 ATTENTION_DROPOUT=0.3
 SOFTMAX_DROPOUT=0.3
+LABEL_SMOOTHING=0.3
 
 tf.keras.mixed_precision.set_global_policy('mixed_float16')
 
@@ -59,25 +60,37 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (high, high))
 
 
 @tfds.decode.make_decoder(output_dtype=tf.float32)
-def decode_video(serialized_image, feature): 
+def decode_video(serialized_image, features): 
     img = tf.io.decode_jpeg(serialized_image, channels=INPUT_SHAPE[-1])
+    img = tf.cast(img, tf.float32)/255
+    
     return tf.image.resize_with_pad(
             img,
             target_height = INPUT_SHAPE[1],
             target_width = INPUT_SHAPE[1],
             method = 'bilinear')
 
-def resample_video(video, label):
-    mask = [True if i in range(0, video.shape[0], EVERY_N_FRAME) else False for i in range(video.shape[0])]
-    video = tf.boolean_mask(video, mask, axis=0)
-    video_len = tf.shape(video)[0].numpy()
+def preprocess_data(video, label):
+    input_length = tf.shape(video)[0]
+            
+    mask_range = tf.range(0, input_length, EVERY_N_FRAME)
+    video = tf.gather(video, mask_range, axis=0)
     
-    if video_len < INPUT_SHAPE[0]:
-        paddings = tf.constant([[0, INPUT_SHAPE[0] - video_len], [0, 0], [0, 0], [0, 0]])
-        video = tf.pad(video, paddings, 'CONSTANT')
-    elif video_len > INPUT_SHAPE[0]:
-        video = video[:INPUT_SHAPE[0]]
+    video_length = tf.shape(video)[0]
+
+    def cut():
+        return video[:INPUT_SHAPE[0]]
     
+    def pad():
+        pad_n = tf.subtract(INPUT_SHAPE[0], video_length)
+        tf.ensure_shape(pad_n, ())
+        paddings = [[0, pad_n], [0, 0], [0, 0], [0, 0]]
+        return tf.pad(video, paddings, 'CONSTANT')
+    
+    video = tf.cond(tf.math.less(video_length, INPUT_SHAPE[0]), pad, cut)
+
+    label = tf.one_hot(label, 101)
+
     return video, label
 
 def prepare_dataloader(
@@ -91,8 +104,8 @@ def prepare_dataloader(
             decoders={'video': decode_video()},
             download_and_prepare_kwargs={'download_config': tfds.download.DownloadConfig(verify_ssl=False)})
 
-    _resample = lambda x: tf.py_function(resample_video, [x['video'], x['label']], Tout=(tf.TensorSpec(INPUT_SHAPE, tf.float32), tf.int64))
-    return dataset.map(_resample).shuffle(1024).batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return dataset.map(lambda x: preprocess_data(x['video'], x['label']))\
+        .shuffle(1024).batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
 if __name__ == '__main__':
     import sys
@@ -103,6 +116,13 @@ if __name__ == '__main__':
     
     trainloader = prepare_dataloader("train")
     testloader = prepare_dataloader("test")
+
+    augmentation = tf.keras.models.Sequential([
+            VideoRandomFlip('horizontal_and_vertical'), 
+            VideoRandomContrast(0.3), 
+            VideoRandomZoom((-0.25, -0.5), (-0.25, -0.5)),
+            VideoRandomRotation(45)
+        ], name='preprocessing')
 
     # Initialize model
     model = create_vivit_classifier(
@@ -117,18 +137,20 @@ if __name__ == '__main__':
         ATTENTION_DROPOUT,
         SOFTMAX_DROPOUT,
         LAYER_NORM_EPS,
-        NUM_CLASSES
+        NUM_CLASSES,
+        augmentation
     )
 
     # Compile the model with the optimizer, loss function
     # and the metrics.
     optimizer = keras.optimizers.Adam(learning_rate=LEARNING_RATE)
+    
     model.compile(
             optimizer=optimizer,
-            loss="sparse_categorical_crossentropy",
+            loss=tf.losses.CategoricalCrossentropy(label_smoothing=LABEL_SMOOTHING),
             metrics=[
-                keras.metrics.SparseCategoricalAccuracy(name="accuracy"),
-                keras.metrics.SparseTopKCategoricalAccuracy(5, name="top-5-accuracy"),
+                keras.metrics.CategoricalAccuracy(name="accuracy"),
+                keras.metrics.TopKCategoricalAccuracy(5, name="top-5-accuracy"),
                 ],
             )
     
@@ -158,7 +180,8 @@ if __name__ == '__main__':
                 'num_heads': NUM_HEADS,
                 'num_layers': NUM_LAYERS,
                 'attention_dropout': ATTENTION_DROPOUT,
-                'softmax_dropout': SOFTMAX_DROPOUT
+                'softmax_dropout': SOFTMAX_DROPOUT,
+                'label_smoothing': LABEL_SMOOTHING,
             }
 
             callbacks.append(NeptuneCallback(run=run, base_namespace=""))

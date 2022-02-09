@@ -48,11 +48,15 @@ def create_vivit_classifier(
     softmax_dropout,
     layer_norm_eps,
     num_classes,
+    preprocessing_layers=None
 ):
     # Get the input layer
     inputs = layers.Input(shape=input_shape)
-    # Create patches.
-    patches = tubelet_embedder(inputs)
+    if preprocessing_layers is not None:
+        preproc = preprocessing_layers(inputs)
+        patches = tubelet_embedder(preproc)
+    else:
+        patches = tubelet_embedder(inputs)
     # Encode patches.
     encoded_patches = positional_encoder(patches)
 
