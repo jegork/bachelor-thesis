@@ -15,7 +15,9 @@
 
 # Convert DINO model to ViViT 32-frame model
 
-!python3 vivit_transformers/convert_vit_to_vivit.py --vit_model_path facebook/dino-vitb16 --tubelet_n 2 --video_length 32 --output_path vivit_dino_32frames_untrained
+```sh
+python3 vivit_transformers/convert_vit_to_vivit.py --vit_model_path facebook/dino-vitb16 --tubelet_n 2 --video_length 32 --output_path vivit_dino_32frames_untrained
+```
 
 # Training
 
@@ -40,20 +42,6 @@ Possible models are:
 - vivit
 
 If keyframes are not provided, then uses normal frame sampling.
-
-Possible train keyframes:
-- train_01_10frames.pkl (MobileNet features, KNN, 10 frames)
-- train_01_32frames.pkl (MobileNet features, KNN, 32 frames)
-- train_01_32frames_agglomerative.pkl (MobileNet features, Agglomerative Clustering, 32 frames)
-- train_01_32frames_agglomerative_swin.pkl (Swin features, Agglomerative Clustering, 32 frames)
-
-
-Possible test keyframes:
-- test_01_10frames.pkl (MobileNet features, KNN, 10 frames)
-- test_01_32frames.pkl (MobileNet features, KNN, 32 frames)
-- test_01_32frames_agglomerative.pkl (MobileNet features, Agglomerative Clustering, 32 frames)
-- test_01_32frames_agglomerative_swin.pkl (Swin features, Agglomerative Clustering, 32 frames)
-
 
 ## Example
 
