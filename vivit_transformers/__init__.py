@@ -1,0 +1,1 @@
+from .vivit_transformer import ViViTModel, ViViTForImageClassification, ViViTConfig

@@ -1,6 +1,0 @@
-tensorflow==2.7.0
-neptune-client
-neptune-tensorflow-keras
-tensorflow-datasets
-python-dotenv
-tf_video==0.0.7
